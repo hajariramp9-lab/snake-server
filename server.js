@@ -2,12 +2,16 @@
 // Snake World - Online Server (Node.js + WebSocket)
 // Godot गेम इससे wss:// पर जुड़ेगा। यह हर सांप की चाल खुद तय करता है (server-authoritative)।
 //
-// Godot -> Server:  {"t":"join","name":"Hello"}   खेल में आना
-//                   {"t":"in","a":1.57}           जॉयस्टिक की दिशा (radian)
-// Server -> Godot:  {"t":"welcome","id":1,...}    जुड़ने पर
-//                   {"t":"s", ...}                हर सेकंड 20 बार: आसपास का नज़ारा
-//                   {"t":"dead","reason":"...","score":12}   मरने पर
-//                   {"t":"full"}                  सर्वर भरा हो तो
+// Godot -> Server: {"t":"join","name":"Hello"}   खेल में आना
+//                  {"t":"in","a":1.57}           जॉयस्टिक की दिशा (radian)
+// Server -> Godot: {"t":"welcome","id":1,...}    जुड़ने पर
+//                  {"t":"s", ...}                हर सेकंड 20 बार: आसपास का नज़ारा
+//                  {"t":"dead","reason":"...","score":12}  मरने पर
+//                  {"t":"full"}                  सर्वर भरा हो तो
+//
+// ध्यान: इसमें "अपने आप जागता रहे" वाला हिस्सा जान-बूझकर हटा दिया गया है।
+// अब Render का फ्री सर्वर 15 मिनट कोई न आए तो सो जाएगा (और सोते समय फ्री घंटे खर्च नहीं होते),
+// और जब कोई खिलाड़ी गेम में ONLINE दबाएगा तब अपने आप जाग जाएगा।
 
 const http = require("http");
 const { WebSocketServer } = require("ws");
@@ -110,15 +114,3 @@ setInterval(function () {
 server.listen(PORT, function () {
   console.log("Snake server port " + PORT + " par chal raha hai");
 });
-
-// ---- अपने आप जागता रहे (Render का Free server 15 मिनट शांत रहे तो सो जाता है) ----
-// Render अपना Link RENDER_EXTERNAL_URL में अपने आप दे देता है। Server हर 5 मिनट में
-// खुद को /health पर एक छोटा संदेश भेजता है, इसलिए कभी सोता नहीं। आपको कुछ नहीं करना।
-const SELF_URL = process.env.RENDER_EXTERNAL_URL;
-if (SELF_URL) {
-  setInterval(function () {
-    fetch(SELF_URL + "/health").catch(function () {});
-  }, 5 * 60 * 1000);
-  console.log("Self keep-alive chalu: " + SELF_URL);
-          }
-  
