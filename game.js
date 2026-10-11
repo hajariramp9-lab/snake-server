@@ -10,19 +10,18 @@ const C = {
   START_LEN: 14,
   FOOD_R: 16,
   TURN_RATE: 0.13,
-  SNAKE_SPEED: 4.0,   // सबकी एक जैसी रफ़्तार (Godot में SNAKE_SPEED)
-  BOOST_MULT: 1.6,    // Bolt खाने पर गुणा (Godot में BOOST_MULT)
-  BOOST_TIME: 4.0,    // Boost कितने सेकंड (Godot में BOOST_TIME)
-  BOLT_CHANCE: 0.07,  // कितने फल Bolt होंगे (Godot में BOLT_CHANCE)
-  TICK_RATE: 60,      // सर्वर हर सेकंड 60 बार चलता है (Godot के 60 FPS जैसा)
+  SNAKE_SPEED: 4.0,
+  BOOST_MULT: 1.6,
+  BOOST_TIME: 4.0,
+  BOLT_CHANCE: 0.07,
+  TICK_RATE: 60,
   FRUIT_COUNT: 120,
   MAX_FRUITS: 300,
-  MAX_LEN: 400,       // सांप की अधिकतम लंबाई (डेटा कम रखने के लिए)
+  MAX_LEN: 400,
   KILL_BONUS: 3,
-  BODY_HIT: 24,       // दूसरे सांप के शरीर से टकराने की दूरी
+  BODY_HIT: 24, // दूसरे सांप के शरीर से टकराने की दूरी
 };
 
-// फल: नाम की जगह नंबर भेजते हैं (डेटा कम रहे)। क्रम Godot की FRUITS सूची जैसा
 const FRUIT_TYPES = ["apple", "orange", "strawberry", "cherry", "banana", "grapes", "mango", "watermelon", "bolt"];
 const FRUIT_INFO = [[1, 2], [1, 2], [1, 2], [1, 2], [2, 3], [2, 3], [2, 3], [3, 5], [1, 1]]; // [अंक, बढ़ना]
 const BOLT = 8;
@@ -32,7 +31,6 @@ const COLOR_COUNT = 8;
 const VIEW = 520; // खिलाड़ी के आसपास इतनी दूरी तक की चीज़ें भेजी जाती हैं
 
 function angleDiff(from, to) {
-  // Godot के angle_difference जैसा: सबसे छोटा घुमाव (-PI से PI)
   const d = (to - from) % (Math.PI * 2);
   return ((d + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
 }
@@ -106,7 +104,7 @@ class Game {
     for (const p of this.players.values()) if (p.alive) list.push(p);
     const dying = new Map(); // player -> {reason, killer}
 
-    // 1) चलना (सबकी रफ़्तार एक जैसी, Boost में 1.6 गुना)
+    // 1) चलना
     for (const p of list) {
       p.angle += Math.max(-C.TURN_RATE, Math.min(C.TURN_RATE, angleDiff(p.angle, p.target)));
       const mult = p.boost > 0 ? C.BOOST_MULT : 1.0;
@@ -155,22 +153,13 @@ class Game {
       }
     }
 
-    // 3) टकराव (सब चलने के बाद जाँचते हैं, ताकि सबके साथ बराबरी हो)
+    // 3) टकराव (सिर्फ़ दूसरे सांप से; खुद से टकराने पर कुछ नहीं होता)
     for (const p of list) {
       if (dying.has(p)) continue;
       const h = p.body[0];
-      for (let i = 10; i < p.body.length; i++) {
-        const dx = h.x - p.body[i].x;
-        const dy = h.y - p.body[i].y;
-        if (dx * dx + dy * dy < (C.HEAD_R * 0.8) ** 2) {
-          dying.set(p, { reason: "Khud se takra gaye!", killer: null });
-          break;
-        }
-      }
-      if (dying.has(p)) continue;
       const lim = C.BODY_HIT * C.BODY_HIT;
       for (const q of list) {
-        if (q === p) continue;
+        if (q === p) continue; // अपना शरीर छोड़ दो
         const reach = q.body.length * C.SEG_DIST + 60;
         const qh = q.body[0];
         if (Math.abs(qh.x - h.x) > reach || Math.abs(qh.y - h.y) > reach) continue;
@@ -209,7 +198,7 @@ class Game {
     if (this.onDeath) this.onDeath(p, reason, killer);
   }
 
-  // ---- किसी खिलाड़ी को भेजने वाला संदेश (सिर्फ़ उसके आसपास का हिस्सा) ----
+  // ---- किसी एक खिलाड़ी को भेजने वाला संदेश (सिर्फ़ उसके आसपास का हिस्सा) ----
   snapshotFor(p) {
     const h = p.body[0];
     const ps = [];
@@ -246,4 +235,4 @@ class Game {
 }
 
 module.exports = { Game, C, FRUIT_TYPES };
-        
+                                                                        
