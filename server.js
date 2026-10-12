@@ -4,22 +4,20 @@
 //
 // Godot -> Server: {"t":"join","name":"Hello"}   खेल में आना
 //                  {"t":"in","a":1.57}           जॉयस्टिक की दिशा (radian)
-// Server -> Godot: {"t":"welcome","id":1,...}    जुड़ने पर
+//                  {"t":"revive"}                विज्ञापन देखकर दोबारा जीवित होना
+// Server -> Godot: {"t":"welcome","id":1,...}    जुड़ने या Revive होने पर
 //                  {"t":"s", ...}                हर सेकंड 20 बार: आसपास का नज़ारा
-//                  {"t":"dead","reason":"...","score":12}  मरने पर
+//                  {"t":"dead","reason":"...","score":12}   मरने पर
+//                  {"t":"revive_fail"}           Revive नहीं हो सका
 //                  {"t":"full"}                  सर्वर भरा हो तो
-//
-// ध्यान: इसमें "अपने आप जागता रहे" वाला हिस्सा जान-बूझकर हटा दिया गया है।
-// अब Render का फ्री सर्वर 15 मिनट कोई न आए तो सो जाएगा (और सोते समय फ्री घंटे खर्च नहीं होते),
-// और जब कोई खिलाड़ी गेम में ONLINE दबाएगा तब अपने आप जाग जाएगा।
-
 const http = require("http");
 const { WebSocketServer } = require("ws");
 const { Game, C, FRUIT_TYPES } = require("./game");
 
 const PORT = process.env.PORT || 8080;
-const MAX_PLAYERS = 20;
-const SEND_EVERY = 3; // 60 / 3 = 20 बार प्रति सेकंड संदेश भेजना
+const MAX_PLAYERS = 25;
+const SEND_EVERY = 3;            // 60 / 3 = 20 बार प्रति सेकंड संदेश भेजना
+const REVIVE_WINDOW_MS = 120000; // मरने के बाद इतनी देर तक Revive हो सकता है
 
 const game = new Game();
 
@@ -38,13 +36,29 @@ function send(ws, obj) {
   if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
 }
 
+function sendWelcome(ws, p) {
+  send(ws, {
+    t: "welcome",
+    id: p.id,
+    world: C.WORLD,
+    speed: C.SNAKE_SPEED,
+    boost_mult: C.BOOST_MULT,
+    fruit_types: FRUIT_TYPES,
+  });
+}
+
 game.onDeath = function (p, reason, killer) {
   send(p.ws, { t: "dead", reason: reason, score: p.score, by: killer ? killer.name : "" });
-  if (p.ws) p.ws.player = null;
+  if (p.ws) {
+    // Revive के लिए मरते समय की जानकारी सँभालकर रखो
+    p.ws.lastDeath = { name: p.name, col: p.col, score: p.score, len: p.body.length, at: Date.now(), used: false };
+    p.ws.player = null;
+  }
 };
 
 wss.on("connection", function (ws) {
   ws.player = null;
+  ws.lastDeath = null;
   ws.isAlive = true;
   ws.on("pong", function () { ws.isAlive = true; });
 
@@ -56,19 +70,25 @@ wss.on("connection", function (ws) {
     if (m.t === "join") {
       if (ws.player) return;
       if (game.players.size >= MAX_PLAYERS) { send(ws, { t: "full" }); return; }
+      ws.lastDeath = null;
       const p = game.addPlayer(m.name);
       p.ws = ws;
       ws.player = p;
-      send(ws, {
-        t: "welcome",
-        id: p.id,
-        world: C.WORLD,
-        speed: C.SNAKE_SPEED,
-        boost_mult: C.BOOST_MULT,
-        fruit_types: FRUIT_TYPES,
-      });
+      sendWelcome(ws, p);
     } else if (m.t === "in") {
       if (ws.player) game.setTarget(ws.player, m.a);
+    } else if (m.t === "revive") {
+      if (ws.player) return;
+      const d = ws.lastDeath;
+      if (!d || d.used || Date.now() - d.at > REVIVE_WINDOW_MS || game.players.size >= MAX_PLAYERS) {
+        send(ws, { t: "revive_fail" });
+        return;
+      }
+      d.used = true; // एक मौत पर एक ही Revive
+      const p = game.revivePlayer(d);
+      p.ws = ws;
+      ws.player = p;
+      sendWelcome(ws, p);
     }
   });
 
@@ -79,14 +99,15 @@ wss.on("connection", function (ws) {
   ws.on("error", function () {});
 });
 
-// जो खिलाड़ी बिना बताए गायब हो जाएँ उन्हें हटाना
+// जो खिलाड़ी जवाब न दें (कनेक्शन टूट गया हो) उन्हें हटाना
+// समय ज़्यादा रखा है ताकि विज्ञापन देखते समय कनेक्शन न कटे
 setInterval(function () {
   wss.clients.forEach(function (ws) {
     if (!ws.isAlive) { ws.terminate(); return; }
     ws.isAlive = false;
     ws.ping();
   });
-}, 30000);
+}, 90000);
 
 function broadcast() {
   for (const p of game.players.values()) {
@@ -114,3 +135,14 @@ setInterval(function () {
 server.listen(PORT, function () {
   console.log("Snake server port " + PORT + " par chal raha hai");
 });
+
+// ---- अपने आप जागता रहे (Render का Free server 15 मिनट शांत रहे तो सो जाता है) ----
+// Render अपना Link RENDER_EXTERNAL_URL में अपने आप दे देता है। Server हर 5 मिनट में
+// खुद को /health पर एक छोटा संदेश भेजता है, इसलिए कभी सोता नहीं। आपको कुछ नहीं करना।
+const SELF_URL = process.env.RENDER_EXTERNAL_URL;
+if (SELF_URL) {
+  setInterval(function () {
+    fetch(SELF_URL + "/health").catch(function () {});
+  }, 5 * 60 * 1000);
+  console.log("Self keep-alive chalu: " + SELF_URL);
+  }
