@@ -1,27 +1,29 @@
 "use strict";
 // Snake World - खेल का दिमाग (Server पर चलता है)
 // नंबर Godot वाले गेम से बिल्कुल एक जैसे हैं, ताकि हर जगह चाल एक जैसी रहे।
-
 const C = {
-  WORLD: 2400,
+  WORLD: 6000,          // नक्शा बहुत बड़ा (पहले 2400)
   HEAD_R: 17,
   TAIL_R: 7,
   SEG_DIST: 14,
   START_LEN: 14,
   FOOD_R: 16,
   TURN_RATE: 0.13,
-  SNAKE_SPEED: 4.0,
-  BOOST_MULT: 1.6,
-  BOOST_TIME: 4.0,
-  BOLT_CHANCE: 0.07,
-  TICK_RATE: 60,
-  FRUIT_COUNT: 120,
-  MAX_FRUITS: 300,
-  MAX_LEN: 400,
+  SNAKE_SPEED: 4.0,     // सबकी एक जैसी रफ़्तार (Godot में SNAKE_SPEED)
+  BOOST_MULT: 1.6,      // Bolt खाने पर गुणा (Godot में BOOST_MULT)
+  BOOST_TIME: 4.0,      // Boost कितने सेकंड (Godot में BOOST_TIME)
+  BOLT_CHANCE: 0.07,    // कितने फल Bolt होंगे (Godot में BOLT_CHANCE)
+  TICK_RATE: 60,        // सर्वर हर सेकंड 60 बार चलता है
+  FRUIT_COUNT: 700,     // बड़े नक्शे के लिए ज़्यादा फल (पहले 120)
+  MAX_FRUITS: 1200,     // (पहले 300)
+  MAX_LEN: 400,         // सांप की अधिकतम लंबाई (डेटा कम रखने के लिए)
   KILL_BONUS: 3,
-  BODY_HIT: 24, // दूसरे सांप के शरीर से टकराने की दूरी
+  BODY_HIT: 24,         // दूसरे सांप के शरीर से टकराने की दूरी
+  SELF_HIT_KILLS: false, // false = ONLINE में सांप खुद से टकराए तो नहीं मरता; true करने पर मरेगा
+  REVIVE_INVULN: 150,   // Revive के बाद करीब 2.5 सेकंड कोई नहीं मार सकता
 };
 
+// फल: नाम की जगह नंबर भेजते हैं (डेटा कम रहे)। क्रम Godot की FRUITS सूची जैसा
 const FRUIT_TYPES = ["apple", "orange", "strawberry", "cherry", "banana", "grapes", "mango", "watermelon", "bolt"];
 const FRUIT_INFO = [[1, 2], [1, 2], [1, 2], [1, 2], [2, 3], [2, 3], [2, 3], [3, 5], [1, 1]]; // [अंक, बढ़ना]
 const BOLT = 8;
@@ -31,6 +33,7 @@ const COLOR_COUNT = 8;
 const VIEW = 520; // खिलाड़ी के आसपास इतनी दूरी तक की चीज़ें भेजी जाती हैं
 
 function angleDiff(from, to) {
+  // Godot के angle_difference जैसा: सबसे छोटा घुमाव (-PI से PI)
   const d = (to - from) % (Math.PI * 2);
   return ((d + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
 }
@@ -82,10 +85,23 @@ class Game {
       target: angle,
       boost: 0,
       score: 0,
+      invuln: 0,
       alive: true,
       ws: null,
     };
     this.players.set(p.id, p);
+    return p;
+  }
+
+  // मरने के बाद विज्ञापन देखकर वापसी: वही नाम, रंग, स्कोर और लंबाई, नई सुरक्षित जगह पर
+  revivePlayer(info) {
+    const p = this.addPlayer(info.name);
+    if (typeof info.col === "number") p.col = info.col;
+    p.score = info.score | 0;
+    const want = Math.min(C.MAX_LEN, Math.max(C.START_LEN, info.len | 0));
+    const tail = p.body[p.body.length - 1];
+    while (p.body.length < want) p.body.push({ x: tail.x, y: tail.y });
+    p.invuln = C.REVIVE_INVULN;
     return p;
   }
 
@@ -104,8 +120,9 @@ class Game {
     for (const p of this.players.values()) if (p.alive) list.push(p);
     const dying = new Map(); // player -> {reason, killer}
 
-    // 1) चलना
+    // 1) चलना (सबकी रफ़्तार एक जैसी, Boost में 1.6 गुना)
     for (const p of list) {
+      if (p.invuln > 0) p.invuln--;
       p.angle += Math.max(-C.TURN_RATE, Math.min(C.TURN_RATE, angleDiff(p.angle, p.target)));
       const mult = p.boost > 0 ? C.BOOST_MULT : 1.0;
       if (p.boost > 0) p.boost--;
@@ -153,13 +170,29 @@ class Game {
       }
     }
 
-    // 3) टकराव (सिर्फ़ दूसरे सांप से; खुद से टकराने पर कुछ नहीं होता)
+    // 3) टकराव (सब चलने के बाद जाँचते हैं, ताकि सबके साथ बराबरी हो)
     for (const p of list) {
       if (dying.has(p)) continue;
+      if (p.invuln > 0) continue; // Revive के बाद कुछ पल सुरक्षित
       const h = p.body[0];
+
+      // खुद से टकराना (SELF_HIT_KILLS false हो तो जाँच ही नहीं होती)
+      if (C.SELF_HIT_KILLS) {
+        for (let i = 10; i < p.body.length; i++) {
+          const dx = h.x - p.body[i].x;
+          const dy = h.y - p.body[i].y;
+          if (dx * dx + dy * dy < (C.HEAD_R * 0.8) ** 2) {
+            dying.set(p, { reason: "Khud se takra gaye!", killer: null });
+            break;
+          }
+        }
+        if (dying.has(p)) continue;
+      }
+
       const lim = C.BODY_HIT * C.BODY_HIT;
       for (const q of list) {
-        if (q === p) continue; // अपना शरीर छोड़ दो
+        if (q === p) continue;
+        if (q.invuln > 0) continue; // सुरक्षित सांप के शरीर से कोई नहीं मरता
         const reach = q.body.length * C.SEG_DIST + 60;
         const qh = q.body[0];
         if (Math.abs(qh.x - h.x) > reach || Math.abs(qh.y - h.y) > reach) continue;
@@ -198,7 +231,7 @@ class Game {
     if (this.onDeath) this.onDeath(p, reason, killer);
   }
 
-  // ---- किसी एक खिलाड़ी को भेजने वाला संदेश (सिर्फ़ उसके आसपास का हिस्सा) ----
+  // ---- हर खिलाड़ी को भेजने वाला संदेश (सिर्फ़ उसके आसपास का हिस्सा) ----
   snapshotFor(p) {
     const h = p.body[0];
     const ps = [];
@@ -235,4 +268,4 @@ class Game {
 }
 
 module.exports = { Game, C, FRUIT_TYPES };
-                                                                        
+                                              
